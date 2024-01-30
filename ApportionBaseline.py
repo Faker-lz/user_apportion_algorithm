@@ -38,20 +38,23 @@ def apportion_task(user_task_value: pd.DataFrame,
     # 返回结果，变动的用户
     finished_user_pd = pd.DataFrame(columns=['user_id', 'task_id'])
 
-    # 优先将任务分配给必须完成任务的用户
-    if user_must_do_task is not None and not user_must_do_task.empty:
-        # 分配任务给必须完成任务的用户
-        finished_user_pd = user_must_do_task
-        # 更新任务分配数据
-        task_apportion_number = finished_user_pd.groupby('task_id')['user_id'].count()
-        task_user_quota['apportion_number'] = task_user_quota['task_id'].map(task_apportion_number).fillna(0).astype(int)
-        fixed_user = user_must_do_task['user_id'].unique().tolist()
-        # 更新分配满的任务
-        filled_tasks = task_user_quota.loc[task_user_quota['apportion_number'] >= task_user_quota['user_number'], 'task_id'].unique().tolist()
+    # 将只擅长一种任务的用户看作是必须分配到该任务里的用户
+    user_fit_task_number = user_task_value.groupby('user_id')['task_id'].count().reset_index()
+    user_fit_task_number = user_fit_task_number.rename(columns={'task_id': 'user_fit_number'})
+    user_only_one_fit_task = user_fit_task_number.loc[user_fit_task_number['user_fit_number']==1, 'user_id'].unique().tolist()
+    user_only_one_fit_task = user_task_value.loc[user_task_value['user_id'].isin(user_only_one_fit_task), ['user_id', 'task_id']].copy()    
+
+    if user_must_do_task is None:
+        user_must_do_task = user_only_one_fit_task
+    else:
+        user_must_do_task = pd.concat([user_must_do_task, user_only_one_fit_task], ignore_index=True)
 
     # 先获取可用的用户，之后根据能参加的项目的数量对用户进行排序且分配用户
     orial_user_task_value = user_task_value.copy()
     user_task_value = user_task_value.loc[~user_task_value['user_id'].isin(finished_user_pd['user_id'].unique().tolist())]
+    # TODO 为什么去掉0之后总价值反倒还会变小
+    # user_task_value = user_task_value.loc[user_task_value['value'] > 0]
+    user_task_value = user_task_value.sort_values('value', ascending=False)
 
     # 获取用户参加项目的数量
     user_fit_task_number = user_task_value.groupby('user_id')['task_id'].count().reset_index()
@@ -62,7 +65,7 @@ def apportion_task(user_task_value: pd.DataFrame,
     for index in range(user_fit_task_number.shape[0]):
         user_id = user_fit_task_number.loc[index, 'user_id']
         task_score_row = user_task_value.loc[user_task_value['user_id']==user_id]
-        task_score_row = task_score_row.sort_values('value', ascending=False)
+        # task_score_row = task_score_row.sort_values('value', ascending=False)
         if user_fit_task_number.loc[index, 'user_fit_number'] == 0:
             continue
         task_score_row = task_score_row.head(1)[['user_id', 'task_id']].reset_index(drop=True)
@@ -94,22 +97,21 @@ def apportion_task(user_task_value: pd.DataFrame,
             # 获取该用户擅长的且未分配满的项目
             excess_user_unfilled_task_value = user_task_value.loc[((user_task_value['user_id'] == excess_user) & (~user_task_value['task_id'].isin(filled_tasks)))]
             if excess_user_unfilled_task_value.empty:
-                # TODO 未来的优化方向，如果用户擅长的项目都分配满了，就替换最擅长的项目里最差的用户
                 # baseline里先剔除这个用户的分配
                 # 替换最擅长任务里最差且成功率低于自己的用户
                 excess_user_task_value = user_task_value.loc[user_task_value['user_id'] == excess_user]
                 best_proference_task = excess_user_task_value.head(1)[['user_id', 'task_id']].reset_index(drop=True)
                 # 拿到该用户最擅长任务里的最不擅长该任务的用户
-                exchange_target_user_record = finished_user_pd.loc[((finished_user_pd['task_id'] == best_proference_task['task_id']) & \
+                exchange_target_user_record = finished_user_pd.loc[((finished_user_pd['task_id'] == best_proference_task['task_id'].values[0]) & \
                                                                     (~finished_user_pd['user_id'].isin(fixed_user)))].copy()
                 exchange_target_user_record = pd.merge(exchange_target_user_record, user_task_value,on=['user_id', 'task_id'] ,how='left')
                 exchange_target_user_record = exchange_target_user_record.sort_values('value', ascending=True)
                 exchange_target_user_record = exchange_target_user_record.head(1)
-                finished_user_pd.loc[finished_user_pd['user_id']==excess_user, 'task_id'] = exchange_target_user_record['task_id']
+                finished_user_pd.loc[finished_user_pd['user_id']==excess_user, 'task_id'] = exchange_target_user_record['task_id'].values[0]
                 # 删除被强占用户的分配记录
-                indices_to_drop = finished_user_pd[finished_user_pd['user_id'] == exchange_target_user_record['user_id']].index
+                indices_to_drop = finished_user_pd[finished_user_pd['user_id'] == exchange_target_user_record['user_id'].values[0]].index
                 finished_user_pd = finished_user_pd.drop(indices_to_drop)
-                # task_user_quota.loc[task_user_quota['task_id']==excess_task, 'apportion_number'] -= 1
+                task_user_quota.loc[task_user_quota['task_id']==excess_task, 'apportion_number'] -= 1
             else:
                 task_score_row = excess_user_unfilled_task_value.head(1)[['user_id', 'task_id']].reset_index(drop=True)
                 new_task_id = task_score_row['task_id'].values[0]
@@ -127,8 +129,8 @@ def apportion_task(user_task_value: pd.DataFrame,
     # 第三轮分配，将前两轮未分配的用户分配给未分配满的任务, 优先分配未
     free_users = user_task_value.loc[~user_task_value['user_id'].isin(finished_user_pd['user_id'].tolist()), 'user_id'].unique().tolist()
     # 计算未分配满的任务，以及差的人数
-    unfilled_tasks = task_user_quota.loc[~task_user_quota['task_id'].isin(filled_tasks), 'task_id'].tolist()
-    unfilled_tasks = task_user_quota.loc[task_user_quota['task_id'].isin(unfilled_tasks)].copy()
+    # unfilled_tasks = task_user_quota.loc[~task_user_quota['task_id'].isin(filled_tasks), 'task_id'].tolist()
+    unfilled_tasks = task_user_quota.loc[~task_user_quota['task_id'].isin(filled_tasks)].copy()
     unfilled_tasks['need_number'] = unfilled_tasks['user_number'] - unfilled_tasks['apportion_number']
     unfilled_tasks = unfilled_tasks.sort_values('need_number', ascending=False) 
 
@@ -170,14 +172,15 @@ def apportion_task(user_task_value: pd.DataFrame,
         task_user_quota.loc[task_user_quota['task_id']==task_id, 'apportion_number'] += 1
     task_user_quota['description'] = task_user_quota.apply(apportion_description, axis=1)   
     all_value = pd.merge(finished_user_pd, orial_user_task_value, on=['user_id', 'task_id'], how='left')
-    all_value = all_value['value'].sum()  
-    return finished_user_pd, task_user_quota, all_value
+    # all_value.to_excel('./no_zero_all_value.xlsx')
+    value = all_value['value'].sum() 
+    return finished_user_pd, task_user_quota, value
 
 if __name__ == "__main__":
     user_task_quota = pd.read_excel('./task_user_quota.xlsx')
     user_task_value = pd.read_excel('./user_task_value.xlsx')
     finished_user_pd, user_task_quota, all_value = apportion_task(user_task_value, user_task_quota, None)
-    print(finished_user_pd.sort_values('user_id'))
+    print(finished_user_pd.sort_values('user_id', ascending=False))
     print(user_task_quota)
     print(all_value * 100)
 

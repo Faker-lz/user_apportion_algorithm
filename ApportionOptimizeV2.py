@@ -67,6 +67,7 @@ def apportion_task(user_task_value: pd.DataFrame,
     # 先获取可用的用户，之后根据能参加的项目的数量对用户进行排序且分配用户
     orial_user_task_value = user_task_value.copy()
     user_task_value = user_task_value.loc[~user_task_value['user_id'].isin(finished_user_pd['user_id'].unique().tolist())]
+    user_task_value = user_task_value.loc[user_task_value['value'] != 0]
     user_task_value = user_task_value.sort_values('value', ascending=False)
 
     # 第一轮按照适合任务多少进行分配，优先分配用户到最擅长的任务中，所以对于不擅长任何任务的用户不进行分配
@@ -110,13 +111,14 @@ def apportion_task(user_task_value: pd.DataFrame,
             excess_user_task_value = excess_user_task_value.head(round_two_window)
             # 拿到该用户最擅长任务里的最不擅长该任务且不在必须分配名单里的用户
             for _, selected_task_value in excess_user_task_value.iterrows():
-                exchange_target_user_record = finished_user_pd.loc[((finished_user_pd['task_id'] == selected_task_value['task_id'].values[0]) & \
+                selected_task = int(selected_task_value['task_id'])
+                exchange_target_user_record = finished_user_pd.loc[((finished_user_pd['task_id'] == selected_task) & \
                                                                     (~finished_user_pd['user_id'].isin(fixed_user)))].copy()
                 exchange_target_user_record = pd.merge(exchange_target_user_record, user_task_value,on=['user_id', 'task_id'] ,how='left')
                 exchange_target_user_record = exchange_target_user_record.sort_values('value', ascending=True)
                 exchange_target_user_record = exchange_target_user_record.head(1)
                 # 如果优于目标用户，则进行抢占，并将被抢占的目标用户加入到excess_users列表中
-                if exchange_target_user_record['value'].values[0] < selected_task_value['value'].values[0]:
+                if exchange_target_user_record['value'].values[0] < selected_task_value['value']:
                     exchange_user_id = exchange_target_user_record['user_id'].values[0]
                     finished_user_pd.loc[finished_user_pd['user_id']==exchange_user_id, 'user_id'] = excess_user
                     # 将被替换的用户加入到excess_users队列中
@@ -190,9 +192,9 @@ def apportion_task(user_task_value: pd.DataFrame,
     return finished_user_pd, task_user_quota, all_value
 
 if __name__ == "__main__":
-    user_task_quota = pd.read_excel('./task_user_quota1.xlsx')
-    user_task_value = pd.read_excel('./user_task_value1.xlsx')
-    finished_user_pd, user_task_quota, all_value = apportion_task(user_task_value, user_task_quota, None, 2)
+    user_task_quota = pd.read_excel('./task_user_quota.xlsx')
+    user_task_value = pd.read_excel('./user_task_value.xlsx')
+    finished_user_pd, user_task_quota, all_value = apportion_task(user_task_value, user_task_quota, None, 5)
     print(finished_user_pd.sort_values('user_id'))
     print(user_task_quota)
     print(all_value * 100)

@@ -44,7 +44,7 @@ def apportion_task(user_task_value: pd.DataFrame,
     user_fit_task_number = user_task_value.groupby('user_id')['task_id'].count().reset_index()
     user_fit_task_number = user_fit_task_number.rename(columns={'task_id': 'user_fit_number'})
     user_only_one_fit_task = user_fit_task_number.loc[user_fit_task_number['user_fit_number']==1, 'user_id'].unique().tolist()
-    user_only_one_fit_task = user_task_value.loc[user_task_value['user_id'].isin(user_only_one_fit_task), ['user_id', 'task_id']].copy()
+    user_only_one_fit_task = user_task_value.loc[user_task_value['user_id'].isin(user_only_one_fit_task), ['user_id', 'task_id']].copy()    
 
     if user_must_do_task is None:
         user_must_do_task = user_only_one_fit_task
@@ -67,7 +67,7 @@ def apportion_task(user_task_value: pd.DataFrame,
     user_task_value = user_task_value.loc[~user_task_value['user_id'].isin(finished_user_pd['user_id'].unique().tolist())]
     user_task_value = user_task_value.sort_values('value', ascending=False)
 
-    # 第一轮按照适合任务多少进行分配，优先分配用户到最擅长的任务中，所以对于不擅长任何任务的用户不进行分配
+    # 第一轮优先分配用户到最擅长的任务中，所以对于不擅长任何任务的用户不进行分配
     # 对于超额分配的用户并没有真正分配到finished_user_pd中，而是将其记录在超额分配的用户列表里
     excess_users = list()
     unassigned_user_list = user_task_value['user_id'].unique().tolist()
@@ -120,17 +120,19 @@ def apportion_task(user_task_value: pd.DataFrame,
                 excess_users.append(exchange_user_id)
             # TODO 未来可能的优化方向，如果没有目标怎么办？
         else:
-            task_score_row = excess_user_unfilled_task_value.head(1)[['user_id', 'task_id']].reset_index(drop=True)
-            new_task_id = task_score_row['task_id'].values[0]
-            # 重新分配用户
-            finished_user_pd = pd.concat([finished_user_pd, task_score_row], ignore_index=True)
-            # 更新分配额度
-            task_user_quota.loc[task_user_quota['task_id']==new_task_id, 'apportion_number'] += 1
-            # 判断新分配的任务是否分配满
-            task_need_user_number = task_user_quota.loc[task_user_quota['task_id']==new_task_id, 'user_number'].values[0]
-            task_apportion_number = task_user_quota.loc[task_user_quota['task_id']==new_task_id, 'apportion_number'].values[0]
-            if task_apportion_number == task_need_user_number:
-                filled_tasks.append(new_task_id)
+            # TODO 是否妥当 如果擅长的价值为0 则在下一轮将其随机分配
+            if excess_user_unfilled_task_value['value'].values[0] != 0:
+                task_score_row = excess_user_unfilled_task_value.head(1)[['user_id', 'task_id']].reset_index(drop=True)
+                new_task_id = task_score_row['task_id'].values[0]
+                # 重新分配用户
+                finished_user_pd = pd.concat([finished_user_pd, task_score_row], ignore_index=True)
+                # 更新分配额度
+                task_user_quota.loc[task_user_quota['task_id']==new_task_id, 'apportion_number'] += 1
+                # 判断新分配的任务是否分配满
+                task_need_user_number = task_user_quota.loc[task_user_quota['task_id']==new_task_id, 'user_number'].values[0]
+                task_apportion_number = task_user_quota.loc[task_user_quota['task_id']==new_task_id, 'apportion_number'].values[0]
+                if task_apportion_number == task_need_user_number:
+                    filled_tasks.append(new_task_id)
         
     # 第二轮分配完用户的状态：
     # 1. 必须分配的用户分配到了相应的任务里
@@ -186,8 +188,8 @@ def apportion_task(user_task_value: pd.DataFrame,
     return finished_user_pd, task_user_quota, all_value
 
 if __name__ == "__main__":
-    user_task_quota = pd.read_excel('./task_user_quota1.xlsx')
-    user_task_value = pd.read_excel('./user_task_value1.xlsx')
+    user_task_quota = pd.read_excel('./task_user_quota.xlsx')
+    user_task_value = pd.read_excel('./user_task_value.xlsx')
     finished_user_pd, user_task_quota, all_value = apportion_task(user_task_value, user_task_quota, None)
     print(finished_user_pd.sort_values('user_id'))
     print(user_task_quota)
